@@ -1,28 +1,27 @@
 from django.shortcuts import render
-from rest_framework import viewsets
-from .models import Product, Order, Review, Category
+from rest_framework import viewsets, status, permissions
+from .models import Product, Order, Review, Category    
+from rest_framework.response import Response
 from .serializers import (
     ProductSerializer,
     UserSerializer,
     OrderSerializer,
     ReviewSerializer,
-    CategorySirializers,
+    CategorySerializer,
 )
 from django.contrib.auth.models import User
-from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly, BasePermission 
+from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly, BasePermission
 from django_filters import rest_framework as django_filters
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.pagination import PageNumberPagination
 
 
 # --------------------
 # USER VIEWSET
 # --------------------
 class UserViewSet(viewsets.ModelViewSet):
-    """
-    Handles CRUD operations for users. Only authenticated users can view, update, or delete a user,
-    but anyone can create a new account (POST action).
-    """
+
+    # Handles CRUD operations for users. Only authenticated users can view, update, or delete a user,
+    # but anyone can create a new account (POST action).
     authentication_classes = [JWTAuthentication]  # Token-based authentication using JWT
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]  # Only authenticated users can perform other actions
@@ -46,14 +45,35 @@ class UserViewSet(viewsets.ModelViewSet):
             return User.objects.all()  # Admin users can see all users
         return User.objects.filter(id=self.request.user.id)  # Regular users can only see their own data
 
+    def update(self, request, *args, **kwargs):
+        user = self.get_object()
+        # Handle password update securely
+        if "password" in request.data:
+            user.set_password(request.data["password"])  # Use set_password to hash the password
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Allows only admin users to delete any user, while regular users can only delete their own account.
+        """
+        user = self.get_object()
+        if request.user.is_staff or request.user == user:
+            user.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"detail": "You don't have permission to delete this user."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
 
 # --------------------
 # PRODUCT FILTER
 # --------------------
 class ProductFilter(django_filters.FilterSet):
-
-    # Filters for products based on price range, category, and stock status.
-
+    """
+    Provides filtering options for products based on various criteria such as price range,
+    category, and stock status.
+    """
     min_price = django_filters.NumberFilter(
         field_name="price", lookup_expr="gte"
     )  # Minimum price filter
@@ -71,50 +91,40 @@ class ProductFilter(django_filters.FilterSet):
         model = Product
         fields = ["category", "min_price", "max_price", "in_stock"]
 
-
-class ProductPagination(PageNumberPagination):
-    page_size = 10  # Adjust based on your needs
 # --------------------
 # PRODUCT VIEWSET
 # --------------------
 class ProductViewSet(viewsets.ModelViewSet):
     """
-    Handles CRUD operations for products.
-    Provides token-based authentication and allows read-only access to unauthenticated users.
-    Implements search functionality by product name and category.
+    Handles CRUD operations for products. Allows read-only access for unauthenticated users
+    and enables filtering and searching by category name.
     """
-    
-    authentication_classes = [JWTAuthentication]  # Token-based authentication using JWT
-    permission_classes = [IsAuthenticatedOrReadOnly]  # Read-only access for unauthenticated users
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticatedOrReadOnly]
     serializer_class = ProductSerializer
-    search_fields = ['name', 'category__name']  # Enables search by product name and category name
-    filterset_class = ProductFilter  # Apply product filter
-    pagination_class = ProductPagination
+    queryset = Product.objects.select_related('category').all().order_by('name')    # Optimize query by using select_related for foreign keys
 
-    # Define allowed ordering fields
-    ordering_fields = ['price', 'name']  # Allow ordering by price or name
-    ordering = ['name']  # Default ordering, can be adjusted
+    # Enable filtering and search by product name and category
+    filterset_class = ProductFilter
+    search_fields = ['name', 'category__name']  # Search by product name or category name
+    filter_backends = [django_filters.DjangoFilterBackend]
 
     def get_queryset(self):
         """
-        Optimizes the query by using select_related for foreign keys 
-        and prefetch_related for many-to-many relationships to reduce database hits.
+        Retrieves the list of products with optimized queries. This method can be extended
+        to apply additional filters if needed.
         """
-        queryset = Product.objects.select_related('category').all()  # Assuming 'tags' is a many-to-many relationship
-        return queryset
+        return super().get_queryset()
 
 
 # --------------------
 # ORDER VIEWSET
 # --------------------
-from rest_framework.permissions import BasePermission
-
 class IsAdminOrReadOnly(BasePermission):
     """
     Custom permission to only allow admin/staff users to update or delete orders.
     Regular users can view (GET) and create (POST) their own orders, but cannot modify or delete them.
     """
-
     def has_permission(self, request, view):
         """
         Check if the user has permission to perform the requested action.
@@ -153,12 +163,9 @@ class OrderViewSet(viewsets.ModelViewSet):
     Provides token-based authentication and allows authenticated users to view and create orders.
     Admin/staff users can modify or delete any order.
     """
-
     authentication_classes = [JWTAuthentication]  # Token-based authentication using JWT
     permission_classes = [IsAuthenticated, IsAdminOrReadOnly]  # Admin/staff have full control; regular users have limited access
     serializer_class = OrderSerializer
-    pagination_class = ProductPagination  # Add pagination to handle large datasets
-
     def get_queryset(self):
         """
         Allows users to see only their own orders. Admin users can see all orders.
@@ -166,37 +173,42 @@ class OrderViewSet(viewsets.ModelViewSet):
         and prefetch_related for related objects.
         """
         if self.request.user.is_staff:
-            return Order.objects.select_related('user').all()  # Assuming 'order_items' is a related name for items in the order
-        return Order.objects.filter(user=self.request.user).select_related('user').prefetch_related('order_items')
+            return Order.objects.select_related('user').all().order_by('id')
+        return Order.objects.filter(user=self.request.user).select_related('user')
+
+
+# --------------------
 # REVIEW VIEWSET
 # --------------------
 class ReviewViewSet(viewsets.ModelViewSet):
-
-    # Handles CRUD operations for reviews. Only authenticated users can post a review, and the user who created the review is automatically assigned.
-
-    queryset = Review.objects.all()
-    serializer_class = ReviewSerializer
+    """
+    Handles CRUD operations for reviews. 
+    Only authenticated users can post a review, and the user who created the review is automatically assigned.
+    """
+    queryset = Review.objects.all().order_by('id')  # Fetch all reviews
+    serializer_class = ReviewSerializer  # Serializer for converting review objects to and from JSON
     permission_classes = [
-        IsAuthenticated
-    ]  # Only authenticated users can perform actions
+        IsAuthenticated  # Only authenticated users can perform actions
+    ]
 
     def perform_create(self, serializer):
         """
         Automatically assign the user who created the review.
+        This ensures that the review is linked to the user.
         """
-        serializer.save(user=self.request.user)
+        serializer.save(user=self.request.user)  # Save the review with the current user as the reviewer
 
 class CategoryViewSet(viewsets.ModelViewSet):
     """
     Handles CRUD operations for categories. Provides read-only access for unauthenticated users.
     """
     authentication_classes = [JWTAuthentication]  # Token-based authentication using JWT
-    permission_classes = [IsAuthenticatedOrReadOnly]  # Unauthenticated users can only view categories
-    serializer_class = CategorySirializers  # Serializer for converting category objects to/from JSON
-    queryset = Category.objects.all()  # Fetch all categories
+    permission_classes = [IsAuthenticatedOrReadOnly ]  # Unauthenticated users can only view categories
+    serializer_class = CategorySerializer  # Serializer for converting category objects to/from JSON
+    queryset = Category.objects.all().order_by('id')  # Fetch all categories
 
     def get_queryset(self):
         """
         Return all categories. Additional filters can be added here if needed.
         """
-        return Category.objects.all()
+        return Category.objects.all().order_by('id')

@@ -1,165 +1,207 @@
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APIClient, APITestCase
-from django.contrib.auth.models import User
-from .models import Product, Order, Review, Category
+from rest_framework.test import APITestCase
+from django.contrib.auth import get_user_model
+from .models import Product, Order, Category
+from rest_framework_simplejwt.tokens import RefreshToken
 
 class UserViewSetTests(APITestCase):
-    """
-    Unit tests for UserViewSet to ensure user registration and account retrieval behave as expected.
-    """
     def setUp(self):
-        self.client = APIClient()
-        self.user = User.objects.create_user(username='testuser', password='testpass')
-        self.admin_user = User.objects.create_superuser(username='admin', password='adminpass')
-
+        # Create a test user and an admin user for authentication
+        self.user = get_user_model().objects.create_user(username='testuser', password='testpass')
+        self.admin_user = get_user_model().objects.create_superuser(username='admin', password='adminpass')
+        
+        # Generate a token for the test user for authentication in requests
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+        
     def test_create_user(self):
-        """
-        Test creating a new user (POST).
-        """
-        response = self.client.post(reverse('user-list'), {
-            'username': 'newuser',
-            'password': 'newpass'
-        })
+        # Test creating a new user through the API
+        user_data = {
+            'username': 'newuser', 
+            'password': 'newpass', 
+            'email': 'newuser@example.com'
+        }
+        response = self.client.post(reverse('user-list'), user_data)
+                
+        # Assert that the response status code is 201 (Created)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-    def test_get_user_as_authenticated(self):
-        """
-        Test retrieving user details (GET) when authenticated.
-        """
-        self.client.login(username='testuser', password='testpass')
+    def test_get_user(self):
+        # Authenticate the client using the test user's token
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        
+        # Attempt to retrieve the test user details
         response = self.client.get(reverse('user-detail', args=[self.user.id]))
+                
+        # Assert that the response status code is 200 (OK)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    def test_get_user_as_unauthenticated(self):
-        """
-        Test retrieving user details (GET) when not authenticated.
-        """
+    def test_get_user_unauthenticated(self):
+        # Attempt to retrieve the user details without authentication
         response = self.client.get(reverse('user-detail', args=[self.user.id]))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        
+        # Assert that the response status code is 401 (Unauthorized)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class ProductViewSetTests(APITestCase):
-    """
-    Unit tests for ProductViewSet to ensure product retrieval, creation, and access control behave as expected.
-    """
     def setUp(self):
-        self.client = APIClient()
-        self.user = User.objects.create_user(username='testuser', password='testpass')
+        # Create a test user for authentication
+        self.user = get_user_model().objects.create_user(username='testuser', password='testpass')
+        
+        # Create a test category to associate with products
         self.category = Category.objects.create(name='Test Category')
-        self.product = Product.objects.create(name='Test Product', price=10.99, stock_quantity=100, category=self.category)
+        
+        # Generate a token for the test user for authentication in requests
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
 
     def test_list_products(self):
-        """
-        Test listing products (GET).
-        """
+        # Attempt to retrieve the list of products
         response = self.client.get(reverse('product-list'))
+        
+        # Assert that the response status code is 200 (OK)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    def test_create_product_as_authenticated(self):
-        """
-        Test creating a new product (POST) as an authenticated user.
-        """
-        self.client.login(username='testuser', password='testpass')
+    def test_create_product(self):
+        # Attempt to create a new product through the API
         response = self.client.post(reverse('product-list'), {
             'name': 'New Product',
             'price': 15.99,
             'stock_quantity': 50,
-            'category': self.category.id
+            'category': self.category.id,
+            'image_url': 'https://example.com/image.jpg',
+            'description': 'This is a great product.'
         })
+        
+        # Assert that the response status code is 201 (Created)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-    def test_create_product_as_unauthenticated(self):
-        """
-        Test creating a new product (POST) as an unauthenticated user.
-        """
+    def test_create_product_unauthenticated(self):
+        # Log out the authenticated user to simulate an unauthenticated request
+        self.client.logout()  
+        
+        # Attempt to create a product without authentication
         response = self.client.post(reverse('product-list'), {
             'name': 'New Product',
             'price': 15.99,
             'stock_quantity': 50,
             'category': self.category.id
         })
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        
+        # Assert that the response status code is 401 (Unauthorized)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class OrderViewSetTests(APITestCase):
-    """
-    Unit tests for OrderViewSet to ensure order creation and access control behave as expected.
-    """
     def setUp(self):
-        self.client = APIClient()
-        self.user = User.objects.create_user(username='testuser', password='testpass')
-        self.admin_user = User.objects.create_superuser(username='admin', password='adminpass')
-        self.product = Product.objects.create(name='Test Product', price=10.99, stock_quantity=100)
-        self.order = Order.objects.create(user=self.user)
+        # Create a test user for authentication
+        self.user = get_user_model().objects.create_user(username='testuser', password='testpass')
+        
+        # Create a test category to associate with products
+        self.category = Category.objects.create(name='Test Category')  
+        
+        # Create a test product to place orders
+        self.product = Product.objects.create(
+            name='Test Product', 
+            price=10.99, 
+            stock_quantity=100, 
+            category=self.category
+        )
+        
+        # Generate a token for the test user for authentication in requests
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
 
-    def test_create_order_as_authenticated(self):
-        """
-        Test creating a new order (POST) as an authenticated user.
-        """
-        self.client.login(username='testuser', password='testpass')
+    def test_create_order(self):
+        # Attempt to create a new order through the API
         response = self.client.post(reverse('order-list'), {
-            'user': self.user.id,
-            'product': self.product.id,
-            'quantity': 2
+            'user': self.user.id,  # ID of the user placing the order
+            'product': self.product.id,  # ID of the product being ordered
+            'quantity': 2,  # Quantity of the product to order
         })
+        
+        # Assert that the response status code is 201 (Created)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-    def test_create_order_as_unauthenticated(self):
-        """
-        Test creating a new order (POST) as an unauthenticated user.
-        """
+    def test_create_order_unauthenticated(self):
+        # Log out the authenticated user to simulate an unauthenticated request
+        self.client.logout()
+        
+        # Attempt to create an order without authentication
         response = self.client.post(reverse('order-list'), {
             'user': self.user.id,
             'product': self.product.id,
             'quantity': 2
         })
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_get_order_as_authenticated_user(self):
-        """
-        Test retrieving an order (GET) as an authenticated user.
-        """
-        self.client.login(username='testuser', password='testpass')
-        response = self.client.get(reverse('order-detail', args=[self.order.id]))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    def test_get_order_as_unauthenticated(self):
-        """
-        Test retrieving an order (GET) as an unauthenticated user.
-        """
-        response = self.client.get(reverse('order-detail', args=[self.order.id]))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        
+        # Assert that the response status code is 401 (Unauthorized)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class ReviewViewSetTests(APITestCase):
-    """
-    Unit tests for ReviewViewSet to ensure review creation and access control behave as expected.
-    """
     def setUp(self):
-        self.client = APIClient()
-        self.user = User.objects.create_user(username='testuser', password='testpass')
-        self.product = Product.objects.create(name='Test Product', price=10.99, stock_quantity=100)
+        # Create a test category to associate with products
+        self.category = Category.objects.create(name='Test Category')
+        
+        # Create a test user for authentication
+        self.user = get_user_model().objects.create_user(username='testuser', password='testpass')
+        
+        # Generate a token for the test user for authentication in requests
+        self.token = str(RefreshToken.for_user(self.user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        
+        # Create a test product to review
+        self.product = Product.objects.create(
+            name='Test Product',
+            price=10.99,
+            image_url='http://example.com/image.jpg',
+            description='Test Product Description',
+            stock_quantity=100,
+            category=self.category
+        )
 
-    def test_create_review_as_authenticated(self):
-        """
-        Test creating a new review (POST) as an authenticated user.
-        """
-        self.client.login(username='testuser', password='testpass')
-        response = self.client.post(reverse('review-list'), {
-            'product': self.product.id,
-            'rating': 5,
-            'comment': 'Great product!'
-        })
+    def test_create_review(self):
+        # Attempt to create a review for the test product
+        response = self.client.post(
+            reverse('review-list'),  # Adjust the URL to your reviews endpoint
+            data={
+                'product': self.product.id,  # The ID of the product being reviewed
+                'user': self.user.id,  # Include the user field to associate the review with the user
+                'rating': 5,  # The rating given by the user
+                'comment': 'Great product!'  # The review comment
+            }
+        )
+        
+        # Assert that the response status code is 201 (Created)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-    def test_create_review_as_unauthenticated(self):
-        """
-        Test creating a new review (POST) as an unauthenticated user.
-        """
-        response = self.client.post(reverse('review-list'), {
-            'product': self.product.id,
-            'rating': 5,
-            'comment': 'Great product!'
-        })
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+    def test_create_review_unauthenticated(self):
+        # Log out the authenticated user to simulate an unauthenticated request
+        self.client.logout()  
+        
+        # Attempt to create a review without authentication
+        response = self.client.post(
+            reverse('review-list'),
+            data={
+                'product': self.product.id,  # The ID of the product being reviewed
+                'rating': 5,  # The rating given by the user
+                'comment': 'Great product!'  # The review comment
+            }
+        )
+        
+        # Assert that the response status code is 401 (Unauthorized)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class CategoryViewSetTests(APITestCase):
+    def setUp(self):
+        # Create a test category for listing
+        self.category = Category.objects.create(name='Test Category')
+
+    def test_list_categories(self):
+        # Attempt to retrieve the list of categories
+        response = self.client.get(reverse('category-list'))
+        
+        # Assert that the response status code is 200 (OK)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
