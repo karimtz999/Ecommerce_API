@@ -1,11 +1,6 @@
-from rest_framework.routers import (
-    DefaultRouter,
-)  # this module provide easyer way to handel endpoints creation
+from rest_framework.routers import (DefaultRouter,)  # this module provide easyer way to handel endpoints creation
 from .views import ProductViewSet, UserViewSet, OrderViewSet, ReviewViewSet , CategoryViewSet
-from rest_framework_simplejwt.views import (
-    TokenObtainPairView,
-    TokenRefreshView,
-)
+from rest_framework_simplejwt.views import (TokenObtainPairView,TokenRefreshView,)
 from django.urls import path
 
 router = (DefaultRouter())  # for django API we use DefaultRouter instead of adding it manualy to urlpttern list

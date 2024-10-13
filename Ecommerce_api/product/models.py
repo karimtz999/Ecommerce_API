@@ -5,9 +5,7 @@ from django.core.exceptions import ValidationError
 
 # this class for storig category instences with all data required
 class Category(models.Model):
-    name = models.CharField(
-        max_length=255
-    )  # name of category is a required field
+    name = models.CharField(max_length=255)  # name of category is a required field
 
     def __str__(self):
         return self.name
